@@ -12,7 +12,8 @@ import (
 // specified by the schedule. It may be started, stopped, and the entries may
 // be inspected while running.
 type Cron struct {
-	mu       sync.RWMutex
+	mu sync.RWMutex
+	sync.Once
 	entries  map[string]*Entry
 	stop     chan struct{}
 	add      chan *Entry
@@ -140,6 +141,7 @@ func (c *Cron) RemoveJobOrFunc(name string) {
 
 // Schedule adds a Job to the Cron to be run on the given schedule.
 func (c *Cron) Schedule(schedule Schedule, name string, cmd Job, update bool) {
+	c.init()
 	entry := &Entry{
 		Schedule: schedule,
 		Job:      cmd,
@@ -148,13 +150,8 @@ func (c *Cron) Schedule(schedule Schedule, name string, cmd Job, update bool) {
 	if !c.running {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.entries != nil {
-			_, has := c.entries[name]
-			if !has {
-				c.entries[name] = entry
-			}
-		} else {
-			c.entries = make(map[string]*Entry)
+		_, has := c.entries[name]
+		if !has {
 			c.entries[name] = entry
 		}
 		return
@@ -163,17 +160,16 @@ func (c *Cron) Schedule(schedule Schedule, name string, cmd Job, update bool) {
 	if update {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.entries != nil {
-			c.entries[name] = entry
-			c.update <- entry
-			return
-		}
+		c.entries[name] = entry
+		c.update <- entry
+		return
 	}
 	c.add <- entry
 }
 
 // Entries returns a snapshot of the cron entries.
 func (c *Cron) Entries() []*Entry {
+	c.init()
 	if c.running {
 		c.snapshot <- nil
 		x := <-c.snapshot
@@ -220,6 +216,7 @@ func (c *Cron) runWithRecovery(j Job) {
 // Run the scheduler. this is private just due to the need to synchronize
 // access to the 'running' state variable.
 func (c *Cron) run() {
+	c.init()
 	// Figure out the next activation times for each entry.
 	now := c.now()
 	c.mu.RLock()
@@ -329,4 +326,12 @@ func (c *Cron) entrySnapshot() []*Entry {
 // now returns current time in c location
 func (c *Cron) now() time.Time {
 	return time.Now().In(c.location)
+}
+
+func (c *Cron) init() {
+	c.Once.Do(func() {
+		if c.entries == nil {
+			c.entries = make(map[string]*Entry)
+		}
+	})
 }
