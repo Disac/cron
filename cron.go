@@ -4,6 +4,7 @@ import (
 	"log"
 	"runtime"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -11,6 +12,7 @@ import (
 // specified by the schedule. It may be started, stopped, and the entries may
 // be inspected while running.
 type Cron struct {
+	mu       sync.RWMutex
 	entries  map[string]*Entry
 	stop     chan struct{}
 	add      chan *Entry
@@ -128,6 +130,8 @@ func (c *Cron) UpdateJob(spec, name string, cmd Job) error {
 
 // RemoveJobOrFunc remove a job or func from the Cron to be run on the given schedule.
 func (c *Cron) RemoveJobOrFunc(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.entries != nil {
 		delete(c.entries, name)
 	}
@@ -142,16 +146,23 @@ func (c *Cron) Schedule(schedule Schedule, name string, cmd Job, update bool) {
 		Name:     name,
 	}
 	if !c.running {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		if c.entries != nil {
 			_, has := c.entries[name]
 			if !has {
 				c.entries[name] = entry
 			}
-			return
+		} else {
+			c.entries = make(map[string]*Entry)
+			c.entries[name] = entry
 		}
+		return
 	}
 
 	if update {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		if c.entries != nil {
 			c.entries[name] = entry
 			c.update <- entry
@@ -211,14 +222,18 @@ func (c *Cron) runWithRecovery(j Job) {
 func (c *Cron) run() {
 	// Figure out the next activation times for each entry.
 	now := c.now()
+	c.mu.RLock()
 	for _, entry := range c.entries {
 		entry.Next = entry.Schedule.Next(now)
 	}
+	c.mu.RUnlock()
 
 	for {
 		// Determine the next entry to run.
 		var entries []*Entry
+		c.mu.RLock()
 		entries = mapToSlice(c.entries)
+		c.mu.RUnlock()
 		sort.Sort(byTime(entries))
 
 		var timer *time.Timer
@@ -248,16 +263,20 @@ func (c *Cron) run() {
 				timer.Stop()
 				now = c.now()
 				newEntry.Next = newEntry.Schedule.Next(now)
+				c.mu.Lock()
 				_, has := c.entries[newEntry.Name]
 				if !has {
 					c.entries[newEntry.Name] = newEntry
 				}
+				c.mu.Unlock()
 
 			case newEntry := <-c.update:
 				timer.Stop()
 				now = c.now()
 				newEntry.Next = newEntry.Schedule.Next(now)
+				c.mu.Lock()
 				c.entries[newEntry.Name] = newEntry
+				c.mu.Unlock()
 
 			case <-c.snapshot:
 				c.snapshot <- c.entrySnapshot()
@@ -294,6 +313,8 @@ func (c *Cron) Stop() {
 // entrySnapshot returns a copy of the current cron entry list.
 func (c *Cron) entrySnapshot() []*Entry {
 	entries := []*Entry{}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, e := range c.entries {
 		entries = append(entries, &Entry{
 			Schedule: e.Schedule,
