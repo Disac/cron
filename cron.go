@@ -289,7 +289,7 @@ func (c *Cron) run() {
 	}
 }
 
-// Logs an error to stderr or to the configured error log
+// Logs an error to stderr or to the configured error log.
 func (c *Cron) logf(format string, args ...interface{}) {
 	if c.ErrorLog != nil {
 		c.ErrorLog.Printf(format, args...)
@@ -323,13 +323,16 @@ func (c *Cron) entrySnapshot() []*Entry {
 	return entries
 }
 
-// now returns current time in c location
+// now returns current time in c location.
 func (c *Cron) now() time.Time {
 	return time.Now().In(c.location)
 }
 
+// init cron entries once.
 func (c *Cron) init() {
 	c.Once.Do(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		if c.entries == nil {
 			c.entries = make(map[string]*Entry)
 		}
