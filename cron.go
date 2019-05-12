@@ -126,6 +126,14 @@ func (c *Cron) UpdateJob(spec, name string, cmd Job) error {
 	return nil
 }
 
+// RemoveJobOrFunc remove a job or func from the Cron to be run on the given schedule.
+func (c *Cron) RemoveJobOrFunc(name string) {
+	if c.entries != nil {
+		delete(c.entries, name)
+	}
+	return
+}
+
 // Schedule adds a Job to the Cron to be run on the given schedule.
 func (c *Cron) Schedule(schedule Schedule, name string, cmd Job, update bool) {
 	entry := &Entry{
